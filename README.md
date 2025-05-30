@@ -22,11 +22,9 @@
 | Thiết bị         | Chân kết nối Pico |
 |------------------|------------------|
 | KY-024           | GPIO0            |
-| HY-SR04 TRIG     | GPIO2            |
-| HY-SR04 ECHO     | GPIO3            |
+| HY-SR0           | GPIO2, GPIO3     |
 | Buzzer           | GPIO6            |
-| LCD I2C SDA      | GPIO4            |
-| LCD I2C SCL      | GPIO5            |
+| LCD I2C          | GPIO4, GPIO5     |
 
 ## Kiến trúc phần mềm
 
@@ -63,7 +61,6 @@
 
 ![image](https://github.com/user-attachments/assets/696b361c-da31-4214-ae7b-42623d81aec2)
 
-<img width="195" alt="image" src="https://github.com/user-attachments/assets/480c1aa1-1115-4faf-bf2d-7505346bac3e" />
 
 ---
 
