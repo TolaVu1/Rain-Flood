@@ -4,6 +4,8 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "hardware/i2c.h"
+#include "hardware/regs/timer.h"
+#include "hardware/structs/timer.h"
 #include "lib/lcd_i2c.h"
 #include "hardware/regs/sio.h"
 #include "hardware/structs/sio.h"
@@ -26,7 +28,7 @@
 #define UPDATE_INTERVAL_US (3600LL * 1000000LL) // Cập nhật mỗi 1 giờ (tính bằng micro giây)
 
 volatile uint32_t tip_count = 0; // Số lần cảm biến mưa kích hoạt
-volatile absolute_time_t last_interrupt_time; // Thời điểm lần ngắt gần nhất
+volatile uint32_t last_interrupt_time; // Thời điểm lần ngắt gần nhất (micro giây)
 
 // Đọc trạng thái mức logic của chân GPIO (input) bằng thao tác bit trên thanh ghi SIO
 static inline bool gpio_get_direct(uint pin) {
@@ -73,11 +75,27 @@ static inline void gpio_put_direct(uint pin, bool value) {
         gpio_set_low(pin);
 }
 
+// Đọc timer hardware (micro giây)
+static inline uint32_t timer_hw_get_us() {
+    return timer_hw->timerawl;
+}
+
+// Tính chênh lệch thời gian, tự xử lý overflow
+static inline uint32_t timer_hw_diff_us(uint32_t start, uint32_t end) {
+    return (uint32_t)(end - start);
+}
+
+// Delay micro giây bằng timer hardware
+void timer_hw_sleep_us(uint32_t us) {
+    uint32_t start = timer_hw_get_us();
+    while (timer_hw_diff_us(start, timer_hw_get_us()) < us) {}
+}
+
 // Đợi đến khi chân GPIO đạt mức logic mong muốn hoặc hết thời gian timeout
 bool wait_for_level(uint pin, bool level, uint32_t timeout_us) {
-    absolute_time_t start = get_absolute_time();
+    uint32_t start = timer_hw_get_us();
     while (gpio_get_direct(pin) != level) {
-        if (absolute_time_diff_us(start, get_absolute_time()) > timeout_us)
+        if (timer_hw_diff_us(start, timer_hw_get_us()) > timeout_us)
             return false; // Hết thời gian chờ
     }
     return true;
@@ -96,20 +114,20 @@ void init_ultrasonic() {
 // Đo khoảng cách (cm) bằng cảm biến siêu âm HC-SR04
 float read_distance_cm() {
     gpio_set_low(TRIG_PIN);
-    sleep_us(2);
+    timer_hw_sleep_us(2);
     gpio_set_high(TRIG_PIN);
-    sleep_us(10);
+    timer_hw_sleep_us(10);
     gpio_set_low(TRIG_PIN);
 
     // Đợi ECHO lên mức cao (bắt đầu nhận sóng phản xạ)
     if (!wait_for_level(ECHO_PIN, 1, 30000)) return -1;
 
-    absolute_time_t start = get_absolute_time();
+    uint32_t start = timer_hw_get_us();
     // Đợi ECHO về mức thấp (kết thúc nhận sóng phản xạ)
     if (!wait_for_level(ECHO_PIN, 0, 30000)) return -1;
-    absolute_time_t end = get_absolute_time();
+    uint32_t end = timer_hw_get_us();
 
-    int64_t duration = absolute_time_diff_us(start, end);
+    int32_t duration = timer_hw_diff_us(start, end);
     // Công thức tính khoảng cách: duration / 58.0f (áp dụng cho HC-SR04)
     return duration / 58.0f;
 }
@@ -117,9 +135,9 @@ float read_distance_cm() {
 // Hàm callback xử lý ngắt cạnh xuống (falling edge) từ cảm biến mưa KY-024
 void gpio_callback(uint gpio, uint32_t events) {
     if (gpio == KY024_PIN && (events & GPIO_IRQ_EDGE_FALL)) {
-        absolute_time_t now = get_absolute_time();
-        // Lọc nhiễu: chỉ chấp nhận 1 xung mỗi 100ms
-        if (absolute_time_diff_us(last_interrupt_time, now) > 100000) {
+        uint32_t now = timer_hw_get_us();
+        // Lọc nhiễu: chỉ chấp nhận 1 xung mỗi 2200ms
+        if (timer_hw_diff_us(last_interrupt_time, now) > 200000) {
             tip_count++; // Tăng số lần mưa
             last_interrupt_time = now;
         }
@@ -146,7 +164,7 @@ void show_lcd(float total_rain, float distance) {
 void check_alarm(float rain, float level_cm) {
     bool alert = false;
     // Nếu lượng mưa > 10mm hoặc mực nước < 20cm (nhưng > 0) thì báo động
-    if (rain > 10.0f || (level_cm > 0 && level_cm < 20.0f)) {
+    if (rain > 1010.0f || (level_cm > 0 && level_cm < 20.0f)) {
         alert = true;
     }
     gpio_put_direct(BUZZER_PIN, alert ? 1 : 0);
@@ -179,17 +197,17 @@ int main() {
     // Khởi tạo cảm biến siêu âm
     init_ultrasonic();
 
-    last_interrupt_time = get_absolute_time();
-    absolute_time_t last_hour_time = get_absolute_time();
+    last_interrupt_time = timer_hw_get_us();
+    uint32_t last_hour_time = timer_hw_get_us();
     uint32_t last_tip_count = 0;
 
     while (1) {
-        sleep_ms(1000); // Chờ 1 giây mỗi lần lặp
+        timer_hw_sleep_us(1000000); // 1 giây
 
         float distance = read_distance_cm();
 
-        absolute_time_t now = get_absolute_time();
-        int64_t elapsed_us = absolute_time_diff_us(last_hour_time, now);
+        uint32_t now = timer_hw_get_us();
+        uint32_t elapsed_us = timer_hw_diff_us(last_hour_time, now);
         // Nếu đã đủ thời gian cập nhật (1 giờ)
         if (elapsed_us >= UPDATE_INTERVAL_US) {
             last_tip_count = tip_count;
